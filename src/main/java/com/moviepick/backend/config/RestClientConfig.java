@@ -1,0 +1,30 @@
+package com.moviepick.backend.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestClient;
+
+@Configuration
+public class RestClientConfig {
+
+    @Bean
+    public RestClient kmdbRestClient(KmdbProperties kmdbProperties) {
+        return RestClient.builder()
+                .baseUrl(kmdbProperties.baseUrl())
+                .build();
+    }
+
+    @Bean
+    public RestClient geminiRestClient(GeminiProperties geminiProperties) {
+        return RestClient.builder()
+                .baseUrl(geminiProperties.baseUrl())
+                .build();
+    }
+
+    @Bean
+    public RestClient tossRestClient(TossPaymentsProperties tossPaymentsProperties) {
+        return RestClient.builder()
+                .baseUrl(tossPaymentsProperties.baseUrl())
+                .build();
+    }
+}

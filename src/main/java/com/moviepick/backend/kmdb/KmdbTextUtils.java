@@ -1,0 +1,124 @@
+package com.moviepick.backend.kmdb;
+
+import java.util.Arrays;
+import java.util.List;
+
+/**
+ * KMDB Open API 응답 값 정제 유틸리티.
+ * <p>
+ * KMDB는 검색어와 일치한 구간의 앞뒤를 {@code !HS} / {@code !HE} 마커로 감싸서 표시하고
+ * (예: {@code "!HS 기생충 !HE"}), 포스터/스틸컷처럼 값이 여러 개인 필드는 {@code |}로,
+ * 장르/국가처럼 목록성 필드는 {@code ,}로 구분해 내려줍니다.
+ * 실제 서비스키로 호출한 응답(2026-09-18 확인)을 기준으로 검증되었습니다.
+ */
+public final class KmdbTextUtils {
+
+    // KMDB는 검색어와 일치한 구간을 !HS/!HE로 감싸 표시하는데, 이 마커 템플릿 자체가 태그 바로 안쪽에
+    // 공백을 하나씩 끼워 넣습니다("!HS 기생충 !HE"). 검색어가 "기생충"처럼 단어 전체와 일치하면 그
+    // 공백이 원래 단어 사이 공백과 겹쳐 티가 안 나지만, "학교"처럼 복합어("학교는")의 어간만 일치하면
+    // "!HS 학교 !HE 는"으로 와서, 마커가 끼워 넣은 공백이 그대로 남아 "학교 는"으로 잘못 표시됩니다
+    // (2026-10-14 실측 - KMDB 실제 호출로 확인: title=학교 검색 시 여러 영화에서 재현). 그냥 "!HS"/"!HE"
+    // 문자열만 지우면 이 마커 전용 공백과 원래 있던 공백을 구분할 수 없어서, 마커 태그 앞뒤로 공백을
+    // "최대 한 칸만" 같이 지웁니다(\\s?로 0~1개만 소비) - 원래 단어 사이였던 자리는 진짜 공백 1개 +
+    // 마커 공백 1개=2개 중 1개만 지워져 1개가 남고, 원래 공백이 없던 자리(복합어 내부)는 마커 공백
+    // 1개뿐이라 전부 지워져 0개가 됩니다.
+    private static final String HIGHLIGHT_MARKER_PATTERN = "\\s?!HS\\s?|\\s?!HE\\s?";
+    // 한글 음절/한글 자모/한자/영문/숫자만 "제목의 실제 글자"로 보고, 제목의 맨 앞/맨 뒤에서 이 범위에
+    // 들지 않는 문자가 이어지면 지웁니다. 한자(예: "遺")나 낱자모만으로 된 제목(예: "ㅈ")은 특수문자가
+    // 아니라 실제 제목 글자라 지우면 안 되므로 허용 범위(\\u4E00-\\u9FFF 한자, \\u3131-\\u318E 한글
+    // 자모)에 포함해둡니다.
+    private static final String TITLE_CONTENT_CHAR_CLASS = "0-9A-Za-z가-힣\\u3131-\\u318E\\u4E00-\\u9FFF";
+    // "암살자(들)"처럼 쌍으로 쓰이는 괄호류는 제목의 맨 앞/뒤에 있어도 실제 표기이므로 지우면 안 됩니다
+    // (2026-10-08, 이걸 구분하지 않고 전부 지워서 "암살자(들"로 닫는 괄호가 잘려나가는 버그가 있었습니다).
+    private static final String BRACKET_CHAR_CLASS = "()\\[\\]{}<>「」『』《》〈〉";
+    // 맨 앞/뒤에서 지워도 되는 문자 = "실제 제목 글자"도 아니고 "괄호류"도 아닌 문자(#, -, +, = 등)만입니다.
+    private static final String EDGE_STRIPPABLE_PATTERN = "[^" + TITLE_CONTENT_CHAR_CLASS + BRACKET_CHAR_CLASS + "]";
+
+    private KmdbTextUtils() {
+    }
+
+    public static String clean(String value) {
+        if (value == null) {
+            return null;
+        }
+        String cleaned = value.replaceAll(HIGHLIGHT_MARKER_PATTERN, "").replaceAll("\\s+", " ").trim();
+        // KMDB 원본 데이터 중 일부("암살자 ( 들 )", "무너( )" 등, 2026-10-10 확인)가 괄호 앞뒤에 불필요한
+        // 공백을 그대로 담고 있어, 괄호가 있는 자리에서는 바로 붙은 모양으로 정리합니다. "제목(부제)"
+        // 형태로 공백 없이 붙여 쓰는 게 정상 표기라 이 보정은 안전합니다.
+        cleaned = cleaned.replace(" ( ", "(").replace("( ", "(").replace(" )", ")");
+        return cleaned.isEmpty() ? null : cleaned;
+    }
+
+    // 영화 제목(title) 전용 - "#살아있다"처럼 제목의 맨 앞/맨 뒤에 붙은 특수문자(#, -, +, = 등)만 지우고,
+    // "암살자(들)"처럼 괄호류가 맨 앞/뒤에 있거나 "타짜3-짝귀와의 만남"처럼 제목 중간에 특수문자가 있는
+    // 경우는 실제 표기이므로 그대로 둡니다(맨 앞/뒤에서 한 글자씩만 보면서 실제 제목 글자나 괄호류를
+    // 만나면 그 자리에서 멈추므로, 중간에 있는 문자는 애초에 이 정규식이 건드리지 않습니다). "- +"처럼
+    // 제목 전체가 지움 대상 문자뿐이라 다 지우면 빈 제목이 되는 경우는 null을 돌려주고, 그런 영화는
+    // blank/null 제목 필터링 로직에서 목록에서 자연스럽게 빠집니다.
+    public static String cleanTitle(String value) {
+        String cleaned = clean(value);
+        if (cleaned == null) {
+            return null;
+        }
+        String trimmed = cleaned
+                .replaceAll("^" + EDGE_STRIPPABLE_PATTERN + "+", "")
+                .replaceAll(EDGE_STRIPPABLE_PATTERN + "+$", "");
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    public static List<String> splitPipe(String value) {
+        return splitBy(value, "\\|");
+    }
+
+    public static List<String> splitComma(String value) {
+        return splitBy(value, ",");
+    }
+
+    // nation 파라미터는 부분일치라 "대한민국,미국"처럼 해외와의 공동제작도 걸립니다. "국내 영화만"
+    // 보여주려면 nation 값이 정확히 "대한민국" 하나뿐인지 확인해야 합니다(2026-10-06, 공동제작까지
+    // 포함하면 "국내 영화" 집계/목록에 해외 공동제작작이 섞여 들어가므로 단독인 경우만 인정).
+    public static boolean isDomesticOnlyNation(String nation) {
+        List<String> nations = splitComma(nation);
+        return nations.size() == 1 && "대한민국".equals(nations.get(0));
+    }
+
+    // 영화 목록 화면의 "러닝타임" 필터("2시간 미만"/"2시간 이상") 기준값(분)입니다.
+    public static final int RUNTIME_FILTER_THRESHOLD_MINUTES = 120;
+
+    public static Integer parseRuntimeMinutes(String runtime) {
+        String cleaned = clean(runtime);
+        if (cleaned == null || !cleaned.matches("\\d+")) {
+            return null;
+        }
+        return Integer.parseInt(cleaned);
+    }
+
+    // runtimeFilter는 "under120"/"over120"/"unknown" 중 하나거나(필터 없음은 null/빈 값) 들어옵니다.
+    // 상영시간이 없는(runtimeMinutes null) 영화는 "전체"에는 포함되지만, "미만"/"이상" 어느 쪽에도 속한다고
+    // 단정할 수 없으므로 그 둘을 고르면 제외하고, 반대로 "unknown"을 고르면 그 영화들만 보여줍니다.
+    public static boolean matchesRuntimeFilter(Integer runtimeMinutes, String runtimeFilter) {
+        if (runtimeFilter == null || runtimeFilter.isBlank()) {
+            return true;
+        }
+        if ("unknown".equals(runtimeFilter)) {
+            return runtimeMinutes == null;
+        }
+        if (runtimeMinutes == null) {
+            return false;
+        }
+        return "under120".equals(runtimeFilter)
+                ? runtimeMinutes < RUNTIME_FILTER_THRESHOLD_MINUTES
+                : runtimeMinutes >= RUNTIME_FILTER_THRESHOLD_MINUTES;
+    }
+
+    private static List<String> splitBy(String value, String regex) {
+        String cleaned = clean(value);
+        if (cleaned == null) {
+            return List.of();
+        }
+        return Arrays.stream(cleaned.split(regex))
+                .map(String::trim)
+                .filter(part -> !part.isEmpty())
+                .toList();
+    }
+}
