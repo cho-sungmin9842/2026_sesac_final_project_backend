@@ -4,6 +4,7 @@ import com.moviepick.backend.auth.User;
 import com.moviepick.backend.auth.UserRepository;
 import com.moviepick.backend.common.ApiException;
 import com.moviepick.backend.notification.dto.NotificationDto;
+import com.moviepick.backend.review.Review;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
@@ -56,6 +57,50 @@ public class NotificationService {
                     new Notification(admin, bookingUser.getNickname() + "님이 예매를 취소했습니다 - " + summary, null)
             );
         }
+    }
+
+    // 리뷰 신고 접수 - 신고자 본인에게는 알리지 않고(신고했다는 걸 스스로 알 필요는 없음), 관리자
+    // 전원에게만 알립니다. bookingId는 없으니(리뷰 신고라 예매와 무관) null로 두고, 대신
+    // reviewReportId를 담아 관리자가 "보러가기"로 신고 상세를 조회할 수 있게 합니다.
+    public void notifyReviewReported(User reporter, Review review, String reasonLabel, Long reviewReportId) {
+        String summary = "\"%s\" 리뷰 신고 (%s) - %s".formatted(
+                review.getMovieTitle(), reasonLabel, reporter.getNickname());
+        for (User admin : userRepository.findByAdminTrue()) {
+            notificationRepository.save(new Notification(admin, summary, null, reviewReportId));
+        }
+    }
+
+    // 리뷰 신고 처리 결과 - 관리자가 신고된 리뷰를 삭제하면, 그 리뷰를 신고했던 사용자 전원에게
+    // 처리 결과를 알립니다(ReviewService.adminDelete). 지금까지 신고자는 "접수되었습니다"까지만 알고
+    // 그 이후 실제로 어떻게 처리됐는지 알 방법이 없었습니다.
+    public void notifyReviewReportResolved(User reporter, String movieTitle) {
+        String summary = "\"%s\" 리뷰 신고가 처리되었습니다 - 신고하신 리뷰가 삭제되었습니다.".formatted(movieTitle);
+        notificationRepository.save(new Notification(reporter, summary, null));
+    }
+
+    // 신고 처리 결과(리뷰 삭제 취소) - 관리자가 검토 후 리뷰를 삭제하지 않기로 했을 때, notifyReviewReportResolved와
+    // 대칭으로 다른 문구를 보냅니다(ReviewService.cancelReviewDeletion).
+    public void notifyReviewDeletionCancelled(User reporter, String movieTitle) {
+        String summary = "\"%s\" 리뷰 신고가 처리되었습니다 - 검토 결과 삭제하지 않기로 했습니다.".formatted(movieTitle);
+        notificationRepository.save(new Notification(reporter, summary, null));
+    }
+
+    // 리뷰 삭제 - 신고자뿐 아니라 그 리뷰를 쓴 작성자 본인에게도 어떤 영화의 리뷰가, 어떤 사유로
+    // 삭제됐는지 알립니다(ReviewService.adminDelete). reasonLabels가 비어 있으면 신고 없이 관리자가
+    // 직접 지운 경우라, 사유 문구 없이 삭제 사실만 안내합니다.
+    public void notifyReviewDeletedForAuthor(User author, String movieTitle, String reasonLabels) {
+        String summary = (reasonLabels == null || reasonLabels.isBlank())
+                ? "\"%s\" 리뷰가 관리자에 의해 삭제되었습니다.".formatted(movieTitle)
+                : "\"%s\" 리뷰가 삭제되었습니다 - 사유: %s".formatted(movieTitle, reasonLabels);
+        notificationRepository.save(new Notification(author, summary, null));
+    }
+
+    // 리뷰 "도움이 됐어요" 추천 - 신고(notifyReviewReported)와 대칭되는 긍정적 알림입니다. 신고와
+    // 달리 관리자 조치가 필요 없는 일이라 관리자에게는 보내지 않고, 추천받은 리뷰의 작성자 본인에게만 보냅니다.
+    public void notifyReviewHelpful(User reviewAuthor, Review review, User voter) {
+        String summary = "\"%s\" 리뷰가 \"도움이 됐어요\"를 받았습니다 - %s님"
+                .formatted(review.getMovieTitle(), voter.getNickname());
+        notificationRepository.save(new Notification(reviewAuthor, summary, review.getId(), review.getMovieId()));
     }
 
     // 마이페이지 좌석 배치도의 "좌석변경" - 예매 자체는 그대로 남아있는 변경이라 본인에게만 알리고,

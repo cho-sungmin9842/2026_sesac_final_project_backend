@@ -37,6 +37,28 @@ public class User {
     @Column(name = "is_admin", nullable = false)
     private boolean admin;
 
+    // 관리자 "회원 관리" 화면의 정지 조치 - 정지된 계정은 로그인만 막히고(AuthService.login) 데이터는
+    // 그대로 남아있어, 정지 해제하면 다시 예전처럼 쓸 수 있습니다.
+    @Column(name = "is_suspended", nullable = false)
+    private boolean suspended;
+
+    // 정지 사유(SuspensionReason의 name()) - 정지할 때만 값이 들어가고, 해제하면 다시 null로 비웁니다.
+    @Column(name = "suspension_reason", length = 50)
+    private String suspensionReason;
+
+    // 관리자 "회원 관리" 화면의 온라인/오프라인 표시용 - UserActivityInterceptor가 인증된 요청마다
+    // 갱신합니다(엔티티를 직접 save하지 않고 UserRepository의 벌크 UPDATE로만 갱신하므로 세터는 없음).
+    @Column(name = "last_active_at")
+    private LocalDateTime lastActiveAt;
+
+    // 구글 로그인으로 가입한 계정만 값이 있습니다(일반 가입 계정은 둘 다 null) -
+    // OAuthController 콜백에서 재로그인 시 같은 계정을 찾는 키로 씁니다(provider + provider가 내려준 사용자 id).
+    @Column(name = "oauth_provider", length = 20)
+    private String oauthProvider;
+
+    @Column(name = "oauth_provider_id", length = 255)
+    private String oauthProviderId;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -63,5 +85,18 @@ public class User {
 
     public void changePassword(String newPasswordHash) {
         this.passwordHash = newPasswordHash;
+    }
+
+    public void setSuspended(boolean suspended) {
+        this.suspended = suspended;
+    }
+
+    public void setSuspensionReason(String suspensionReason) {
+        this.suspensionReason = suspensionReason;
+    }
+
+    public void setOauthIdentity(String oauthProvider, String oauthProviderId) {
+        this.oauthProvider = oauthProvider;
+        this.oauthProviderId = oauthProviderId;
     }
 }
